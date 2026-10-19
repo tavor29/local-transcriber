@@ -91,3 +91,31 @@ def test_real_engine_path(tmp_path, monkeypatch):
     assert info == {"language": "en", "duration": 10.0}
     assert out == [({"start": 0.0, "end": 5.0, "text": "one"}, 0.5), ({"start": 5.0, "end": 10.0, "text": "two"}, 1.0)]
     assert seen["compute_type"] == "int8" and seen["device"] == "cpu" and seen["vad_filter"] is True
+
+
+def test_stop_running_job_keeps_text_so_far(client, monkeypatch):
+    from transcriber import engine
+
+    def slow(path, model, language):
+        def gen():
+            for i in range(50):
+                time.sleep(0.05)
+                yield {"start": i, "end": i + 1, "text": f"line {i}"}, (i + 1) / 50
+        return {"language": "en", "duration": 50.0}, gen()
+
+    monkeypatch.setattr(engine, "transcribe", slow)
+    job_id = client.post("/api/jobs", files={"file": ("long.wav", b"x")}).json()["id"]
+    for _ in range(100):
+        if client.get(f"/api/jobs/{job_id}").json()["segments"]:
+            break
+        time.sleep(0.02)
+    assert client.post(f"/api/jobs/{job_id}/stop").status_code == 200
+    for _ in range(100):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "stopped":
+            break
+        time.sleep(0.05)
+    assert job["status"] == "stopped" and 0 < len(job["segments"]) < 50
+    assert "line 0" in client.get(f"/api/jobs/{job_id}/download?fmt=txt").text
+    assert client.post(f"/api/jobs/{job_id}/stop").status_code == 409
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 200

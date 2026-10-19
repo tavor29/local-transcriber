@@ -17,6 +17,7 @@ from . import config, engine
 _queue: "queue.Queue[str]" = queue.Queue()
 _save_lock = threading.Lock()
 _worker: threading.Thread | None = None
+_stop_requested: set[str] = set()
 
 
 def jobs_dir() -> Path:
@@ -94,9 +95,22 @@ def delete(job_id: str) -> bool:
     return True
 
 
+def stop(job_id: str) -> bool:
+    """Stop a queued or running job. A running job stops after its current segment and keeps the text so far."""
+    job = load(job_id)
+    if not job or job["status"] not in ("queued", "running"):
+        return False
+    _stop_requested.add(job_id)
+    if job["status"] == "queued":
+        job.update(status="stopped", finished=time.time())
+        save(job)
+    return True
+
+
 def run(job_id: str) -> None:
     job = load(job_id)
-    if not job:
+    if not job or job["status"] != "queued" or job_id in _stop_requested:
+        _stop_requested.discard(job_id)
         return
     job.update(status="running", started=time.time())
     save(job)
@@ -107,15 +121,21 @@ def run(job_id: str) -> None:
         job.update(duration=info["duration"], detected_language=info["language"])
         last_save = 0.0
         for seg, progress in segments:
+            if job_id in _stop_requested:
+                break
             job["segments"].append(seg)
             job["progress"] = round(progress, 3)
             if time.time() - last_save > 1:
                 save(job)
                 last_save = time.time()
-        job.update(status="done", progress=1.0)
+        if job_id in _stop_requested:
+            job["status"] = "stopped"
+        else:
+            job.update(status="done", progress=1.0)
     except Exception as e:  # keep the worker alive and show the error on the page
         traceback.print_exc()
         job.update(status="failed", error=f"{type(e).__name__}: {e}")
+    _stop_requested.discard(job_id)
     job["finished"] = time.time()
     save(job)
 

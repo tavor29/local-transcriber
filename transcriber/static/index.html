@@ -97,6 +97,7 @@ function statusText(j) {
   if (j.status === "running") return "Transcribing " + Math.round(j.progress*100) + "%";
   if (j.status === "queued") return "Waiting in queue";
   if (j.status === "done") return '<span class="done">Done</span> in ' + mins(j.finished - j.started) + " for " + mins(j.duration) + " of audio";
+  if (j.status === "stopped") return '<span class="failed">Stopped</span>';
   return '<span class="failed">Failed</span>';
 }
 
@@ -118,7 +119,9 @@ async function showSelected() {
   const j = await r.json();
   $("title").textContent = j.filename;
   $("info").innerHTML = statusText(j) + ` · model: ${esc(j.model)}` + (j.detected_language ? ` · language: ${j.detected_language}` : "") + (j.error ? `<br><span class="failed">${esc(j.error)}</span>` : "");
-  $("actions").innerHTML = j.status === "done"
+  $("actions").innerHTML = j.status === "running" || j.status === "queued"
+    ? `<button class="ghost" onclick="stopJob('${j.id}')">Stop</button>`
+    : j.status === "done" || j.status === "stopped"
     ? `<a href="/api/jobs/${j.id}/download?fmt=txt"><button class="ghost">Download .txt</button></a>
        <a href="/api/jobs/${j.id}/download?fmt=srt"><button class="ghost">Download .srt</button></a>
        <button class="ghost" onclick="del('${j.id}')">Delete</button>`
@@ -127,7 +130,13 @@ async function showSelected() {
   el.className = j.segments.length ? "" : "empty";
   el.innerHTML = j.segments.length
     ? j.segments.map(s => `<div class="seg"><span class="ts">${clock(s.start)}</span><span dir="auto">${esc(s.text)}</span></div>`).join("")
-    : (j.status === "failed" ? "No transcript." : "The text will appear here as it is transcribed.");
+    : (j.status === "failed" || j.status === "stopped" ? "No transcript." : "The text will appear here as it is transcribed.");
+}
+
+async function stopJob(id) {
+  if (!confirm("Stop this transcription? The text so far is kept.")) return;
+  await fetch("/api/jobs/" + id + "/stop", {method:"POST"});
+  refresh();
 }
 
 async function del(id) {

@@ -58,10 +58,18 @@ def get_job(job_id: str):
     return job
 
 
+@app.post("/api/jobs/{job_id}/stop")
+def stop_job(job_id: str):
+    if not jobs.stop(job_id):
+        raise HTTPException(409, "Job not found or already finished")
+    return {"stopped": job_id}
+
+
 @app.get("/api/jobs/{job_id}/download")
 def download(job_id: str, fmt: str = "txt"):
     job = jobs.load(job_id)
-    if not job or job["status"] != "done":
+    # A stopped job can still be downloaded, with the text transcribed before it was stopped
+    if not job or job["status"] not in ("done", "stopped"):
         raise HTTPException(404, "Transcript not ready")
     stem = Path(job["filename"]).stem
     if fmt == "srt":
