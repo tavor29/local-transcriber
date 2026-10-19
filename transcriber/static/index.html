@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local Transcriber</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#667085; --line:#e4e7ec; --accent:#2f6fed; --ok:#12805c; --bad:#c4320a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, "Segoe UI", Arial, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:end; }
+  label { font-size: 13px; color: var(--muted); display:block; margin-bottom:4px; }
+  select, input[type=file] { font: inherit; padding: 6px; }
+  button { font: inherit; padding: 8px 16px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); padding: 4px 8px; }
+  button:disabled { opacity: .5; cursor: default; }
+  #drop { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; text-align:center; color:var(--muted); margin-bottom:12px; }
+  #drop.over { border-color: var(--accent); color: var(--accent); }
+  .layout { display:grid; grid-template-columns: 320px 1fr; gap:16px; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+  .job { padding: 10px; border-radius: 8px; cursor:pointer; border:1px solid transparent; }
+  .job:hover { background: var(--bg); }
+  .job.sel { border-color: var(--accent); }
+  .job .name { font-weight: 600; word-break: break-all; }
+  .job .meta { font-size: 12px; color: var(--muted); }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow:hidden; margin-top:6px; }
+  .bar > div { height:100%; background: var(--accent); transition: width .5s; }
+  .done { color: var(--ok); } .failed { color: var(--bad); }
+  #transcript { max-height: 60vh; overflow:auto; line-height: 1.6; }
+  .seg { display:flex; gap:10px; padding: 2px 0; }
+  .seg > span[dir] { flex: 1; }
+  .ts { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; min-width: 56px; padding-top:3px; }
+  .empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Local Transcriber</h1>
+  <p class="sub">Upload a recording and get a transcript. Everything runs on this computer; nothing is sent to the internet.</p>
+
+  <div class="card">
+    <div id="drop">Drag an audio or video file here, or choose one below</div>
+    <div class="row">
+      <div><label>File</label><input type="file" id="file" accept="audio/*,video/*"></div>
+      <div><label>Language</label>
+        <select id="language"><option value="auto">Detect automatically</option><option value="he">Hebrew</option><option value="en">English</option></select></div>
+      <div><label>Mode</label>
+        <select id="quality"><option value="accurate">Accurate (slower)</option><option value="fast">Fast (less accurate)</option></select></div>
+      <button id="go">Transcribe</button>
+    </div>
+    <div id="msg" class="sub" style="margin:10px 0 0"></div>
+  </div>
+
+  <div class="layout">
+    <div class="card"><strong>History</strong><div id="jobs"></div></div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <strong id="title">Transcript</strong>
+        <span id="actions"></span>
+      </div>
+      <div id="info" class="sub" style="margin:6px 0 10px"></div>
+      <div id="transcript" class="empty">Pick a recording from the history.</div>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let selected = null, jobs = [];
+const LANG = {auto:"Auto", he:"Hebrew", en:"English"};
+
+function clock(s) { s = Math.floor(s||0); const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60;
+  return (h? h+":"+String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); }
+function mins(s) { return s ? (s/60).toFixed(1) + " min" : "?"; }
+function esc(t) { return t.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function upload(file) {
+  if (!file) { $("msg").textContent = "Choose a file first."; return; }
+  const fd = new FormData();
+  fd.append("file", file); fd.append("language", $("language").value); fd.append("quality", $("quality").value);
+  $("go").disabled = true; $("msg").textContent = "Uploading " + file.name + "...";
+  try {
+    const r = await fetch("/api/jobs", {method:"POST", body:fd});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    $("msg").textContent = "Added to the queue. You can upload more or leave this page open.";
+    selected = j.id; $("file").value = "";
+    await refresh();
+  } catch (e) { $("msg").textContent = "Upload failed: " + e.message; }
+  $("go").disabled = false;
+}
+
+function statusText(j) {
+  if (j.status === "running") return "Transcribing " + Math.round(j.progress*100) + "%";
+  if (j.status === "queued") return "Waiting in queue";
+  if (j.status === "done") return '<span class="done">Done</span> in ' + mins(j.finished - j.started) + " for " + mins(j.duration) + " of audio";
+  return '<span class="failed">Failed</span>';
+}
+
+function renderList() {
+  $("jobs").innerHTML = jobs.length ? jobs.map(j => `
+    <div class="job ${j.id===selected?'sel':''}" data-id="${j.id}">
+      <div class="name">${esc(j.filename)}</div>
+      <div class="meta">${new Date(j.created*1000).toLocaleString()} · ${LANG[j.language]} · ${j.quality}</div>
+      <div class="meta">${statusText(j)}</div>
+      ${j.status==="running"||j.status==="queued" ? `<div class="bar"><div style="width:${j.progress*100}%"></div></div>` : ""}
+    </div>`).join("") : '<p class="empty">Nothing yet.</p>';
+  document.querySelectorAll(".job").forEach(el => el.onclick = () => { selected = el.dataset.id; renderList(); showSelected(); });
+}
+
+async function showSelected() {
+  if (!selected) return;
+  const r = await fetch("/api/jobs/" + selected);
+  if (!r.ok) return;
+  const j = await r.json();
+  $("title").textContent = j.filename;
+  $("info").innerHTML = statusText(j) + ` · model: ${esc(j.model)}` + (j.detected_language ? ` · language: ${j.detected_language}` : "") + (j.error ? `<br><span class="failed">${esc(j.error)}</span>` : "");
+  $("actions").innerHTML = j.status === "done"
+    ? `<a href="/api/jobs/${j.id}/download?fmt=txt"><button class="ghost">Download .txt</button></a>
+       <a href="/api/jobs/${j.id}/download?fmt=srt"><button class="ghost">Download .srt</button></a>
+       <button class="ghost" onclick="del('${j.id}')">Delete</button>`
+    : (j.status === "failed" ? `<button class="ghost" onclick="del('${j.id}')">Delete</button>` : "");
+  const el = $("transcript");
+  el.className = j.segments.length ? "" : "empty";
+  el.innerHTML = j.segments.length
+    ? j.segments.map(s => `<div class="seg"><span class="ts">${clock(s.start)}</span><span dir="auto">${esc(s.text)}</span></div>`).join("")
+    : (j.status === "failed" ? "No transcript." : "The text will appear here as it is transcribed.");
+}
+
+async function del(id) {
+  if (!confirm("Delete this recording and its transcript?")) return;
+  await fetch("/api/jobs/" + id, {method:"DELETE"});
+  selected = null; $("title").textContent = "Transcript"; $("info").textContent = ""; $("actions").innerHTML = "";
+  $("transcript").className = "empty"; $("transcript").textContent = "Pick a recording from the history.";
+  refresh();
+}
+
+async function refresh() {
+  try { jobs = await (await fetch("/api/jobs")).json(); } catch { return; }
+  renderList();
+  const cur = jobs.find(j => j.id === selected);
+  if (cur) showSelected();
+}
+
+$("go").onclick = () => upload($("file").files[0]);
+const drop = $("drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files[0]); };
+
+refresh();
+setInterval(() => { if (jobs.some(j => j.status==="running"||j.status==="queued")) refresh(); }, 1500);
+</script>
+</body>
+</html>

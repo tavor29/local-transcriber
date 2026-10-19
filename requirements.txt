@@ -1,0 +1,6 @@
+faster-whisper==1.2.1
+# faster-whisper 1.2.1 breaks with PyAV 16+ (metadata_errors argument was removed)
+av>=11,<16
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
