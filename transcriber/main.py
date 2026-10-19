@@ -1,4 +1,5 @@
 """Web server: the upload page and a small JSON API behind it."""
+import os
 import shutil
 import tempfile
 from contextlib import asynccontextmanager
@@ -34,8 +35,9 @@ def create_job(file: UploadFile = File(...), language: str = Form("auto"), quali
         raise HTTPException(400, f"Unsupported file type '{ext}'. Use one of: {', '.join(sorted(config.ALLOWED_EXTENSIONS))}")
     if language not in config.LANGUAGES or quality not in config.QUALITIES:
         raise HTTPException(400, "Bad language or quality")
-    tmp = Path(tempfile.mkstemp(dir=jobs.jobs_dir(), suffix=ext)[1])
-    with tmp.open("wb") as out:
+    fd, name = tempfile.mkstemp(dir=jobs.jobs_dir(), suffix=ext)
+    tmp = Path(name)
+    with os.fdopen(fd, "wb") as out:  # reuse mkstemp's handle so it gets closed; Windows can't move an open file
         shutil.copyfileobj(file.file, out)
     if tmp.stat().st_size > config.MAX_UPLOAD_MB * 1024 * 1024:
         tmp.unlink()
