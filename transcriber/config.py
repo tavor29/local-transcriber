@@ -20,6 +20,9 @@ QUALITIES = ("fast", "accurate")
 DEVICE = os.environ.get("TRANSCRIBER_DEVICE", "cpu")
 COMPUTE_TYPE = os.environ.get("TRANSCRIBER_COMPUTE_TYPE", "int8")
 CPU_THREADS = int(os.environ.get("TRANSCRIBER_THREADS", "4"))
+# How many candidate wordings Whisper weighs per sentence. 1 is about twice as fast as 5,
+# with only a small accuracy cost. Set TRANSCRIBER_BEAM_SIZE=5 for the slower, careful mode.
+BEAM_SIZE = int(os.environ.get("TRANSCRIBER_BEAM_SIZE", "1"))
 
 # Set TRANSCRIBER_FAKE=1 to use a stand-in engine (for tests and demos without models).
 FAKE_ENGINE = os.environ.get("TRANSCRIBER_FAKE") == "1"

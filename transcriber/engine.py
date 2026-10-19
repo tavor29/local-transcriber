@@ -39,7 +39,7 @@ def transcribe(path: str, model_name: str, language: str | None) -> tuple[dict, 
         return _fake(language)
 
     model = _load(model_name)
-    segments, info = model.transcribe(path, language=language, beam_size=5, vad_filter=True)
+    segments, info = model.transcribe(path, language=language, beam_size=config.BEAM_SIZE, vad_filter=True)
     duration = info.duration or 0
 
     def gen():
